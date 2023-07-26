@@ -12,7 +12,7 @@ class SyncNet_color(nn.Module):
         #
         super(SyncNet_color, self).__init__()
 
-        self.face_encoder = nn.Sequential(
+        self.faces_encoder = nn.Sequential(
 
             Conv2d(15, 32, kernel_size=(7, 7), stride=1, padding=3),
 
@@ -68,15 +68,15 @@ class SyncNet_color(nn.Module):
             Conv2d(512, 512, kernel_size=1, stride=1, padding=0),
         )
 
-    def forward(self, audio_sequences, face_sequences):  # audio_sequences := (B, dim, T)
+    def forward(self, audio_sequences, faces_sequences):  # audio_sequences := (B, dim, T)
 
-        face_embedding = self.face_encoder(face_sequences)
+        faces_embedding = self.faces_encoder(faces_sequences)
         audio_embedding = self.audio_encoder(audio_sequences)
 
         audio_embedding = audio_embedding.view(audio_embedding.size(0), -1)
-        face_embedding = face_embedding.view(face_embedding.size(0), -1)
+        faces_embedding = faces_embedding.view(faces_embedding.size(0), -1)
 
         audio_embedding = F.normalize(audio_embedding, p=2, dim=1)
-        face_embedding = F.normalize(face_embedding, p=2, dim=1)
+        faces_embedding = F.normalize(faces_embedding, p=2, dim=1)
 
-        return audio_embedding, face_embedding
+        return audio_embedding, faces_embedding
