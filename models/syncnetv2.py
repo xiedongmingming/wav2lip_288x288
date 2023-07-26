@@ -8,6 +8,7 @@ from .conv2 import Conv2d
 class SyncNet_color(nn.Module):
 
     def __init__(self):
+
         super(SyncNet_color, self).__init__()
 
         self.face_encoder = nn.Sequential(
