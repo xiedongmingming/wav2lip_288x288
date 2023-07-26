@@ -168,7 +168,8 @@ class Dataset(object):
 
                 window.append(img)
 
-            if not all_read: continue
+            if not all_read:
+                continue
 
             try:
 
