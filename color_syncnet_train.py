@@ -64,7 +64,7 @@ class Dataset(object):
 
     def get_frame_id(self, frame):
 
-        return int(basename(frame).split('.')[0])
+        return int(basename(frame).split('.')[0])  # 图片索引编号
 
     def get_window(self, start_frame):
 
@@ -74,7 +74,7 @@ class Dataset(object):
 
         window_fnames = []
 
-        for frame_id in range(start_id, start_id + syncnet_T):
+        for frame_id in range(start_id, start_id + syncnet_T):  # 随后的200MS时长内的图片
 
             frame = join(vidname, '{}.jpg'.format(frame_id))
 
@@ -114,23 +114,25 @@ class Dataset(object):
 
             if len(img_names) <= 3 * syncnet_T:
                 #
+                # print('视频帧总是不足：{}'.format(vidname))
+
                 continue
 
-            img_name = random.choice(img_names)
+            img_name = random.choice(img_names)  # 正样本
 
-            wrong_img_name = random.choice(img_names)
+            wrong_img_name = random.choice(img_names)  # 负样本
 
             while wrong_img_name == img_name:
                 #
                 wrong_img_name = random.choice(img_names)
 
-            if random.choice([True, False]):
+            if random.choice([True, False]):  # 构造正标签
 
                 y = torch.ones(1).float()
 
                 chosen = img_name
 
-            else:
+            else:  # 构造负标签
 
                 y = torch.zeros(1).float()
 
@@ -140,6 +142,8 @@ class Dataset(object):
 
             if window_fnames is None:
                 #
+                # print('视频窗口为空：{}'.format(chosen))
+
                 continue
 
             window = []
@@ -158,9 +162,11 @@ class Dataset(object):
 
                 try:
 
-                    img = cv2.resize(img, (hparams.img_size, hparams.img_size))
+                    img = cv2.resize(img, (hparams.img_size, hparams.img_size))  # 调整大小
 
                 except Exception as e:
+
+                    print('视频帧调整尺寸异常：{}->{}'.format(fname, e))
 
                     all_read = False
 
@@ -169,6 +175,9 @@ class Dataset(object):
                 window.append(img)
 
             if not all_read:
+                #
+                print('视频窗口帧读取失败：{}'.format(chosen))
+
                 continue
 
             try:
@@ -181,24 +190,30 @@ class Dataset(object):
 
             except Exception as e:
 
+                print('视频片段的音频数据读取异常：{}'.format(e))
+
                 continue
 
-            mel = self.crop_audio_window(orig_mel.copy(), img_name)
+            mel = self.crop_audio_window(orig_mel.copy(), img_name)  # 正样本对应的音频数据：{ndarray: {16, 80}}
 
-            if (mel.shape[0] != syncnet_mel_step_size):
+            if mel.shape[0] != syncnet_mel_step_size:
                 #
                 continue
             #
             # H x W x 3 * T
             #
-            x = np.concatenate(window, axis=2) / 255.
+            x = np.concatenate(window, axis=2) / 255.  # {ndarray: (288, 288, 15)}
 
-            x = x.transpose(2, 0, 1)
-            x = x[:, x.shape[1] // 2:]
+            x = x.transpose(2, 0, 1)  # {ndarray: (15, 288, 288)}
+            x = x[:, x.shape[1] // 2:]  # {ndarray: (15, 288//2, 288)}--将第一个数字除以第二个数字并将结果向下舍入为最接近的整数
 
-            x = torch.FloatTensor(x)
+            x = torch.FloatTensor(x)  # {Tensor: (15, 144//2, 288)}
 
             mel = torch.FloatTensor(mel.T).unsqueeze(0)
+
+            # x: {Tensor: (15, 144, 288)} --> [N, C, H, W]
+            # y: {Tensor: (1,)}
+            # mel: {Tensor: (1, 80, 16)} --> 80：属性数量 16：样本数
 
             return x, mel, y
 
@@ -386,33 +401,39 @@ if __name__ == "__main__":
     checkpoint_dir = args.checkpoint_dir
     checkpoint_path = args.checkpoint_path
 
-    if not os.path.exists(checkpoint_dir): os.mkdir(checkpoint_dir)
+    if not os.path.exists(checkpoint_dir):
+        #
+        os.mkdir(checkpoint_dir)
 
     # dataset and dataloader setup
     train_dataset = Dataset('train')
-    test_dataset = Dataset('val')
+    tests_dataset = Dataset('val')
 
-    train_data_loader = data_utils.DataLoader(
+    train_data_loader = data_utils.DataLoader(  # 会将所有数据分批次遍历一遍
         train_dataset,
         batch_size=hparams.syncnet_batch_size,
         shuffle=True,
         num_workers=hparams.num_workers
     )
 
-    test_data_loader = data_utils.DataLoader(
-        test_dataset,
+    tests_data_loader = data_utils.DataLoader(
+        tests_dataset,
         batch_size=hparams.syncnet_batch_size,
         num_workers=8
     )
 
     device = torch.device("cuda" if use_cuda else "cpu")
 
-    # Model
+    ###################################################################
+    # 模型
     model = SyncNet().to(device)
 
     print('total trainable params {}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
 
-    optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad], lr=hparams.syncnet_lr)
+    optimizer = optim.Adam(
+        [p for p in model.parameters() if p.requires_grad],
+        lr=hparams.syncnet_lr
+    )
 
     if checkpoint_path is not None:
         #
@@ -422,7 +443,7 @@ if __name__ == "__main__":
         device,
         model,
         train_data_loader,
-        test_data_loader,
+        tests_data_loader,
         optimizer,
         checkpoint_dir=checkpoint_dir,
         checkpoint_interval=hparams.syncnet_checkpoint_interval,
