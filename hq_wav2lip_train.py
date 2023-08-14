@@ -407,6 +407,7 @@ def train(
             running_disc_fake_loss += disc_fake_loss.item()
 
             if global_step % checkpoint_interval == 0:
+                #
                 save_sample_images(x, g, gt, global_step, checkpoint_dir)
 
             # Logs
@@ -505,64 +506,92 @@ def eval_model(test_data_loader, global_step, device, model, disc):
 
 
 def save_checkpoint(model, optimizer, step, checkpoint_dir, epoch, prefix=''):
+    #
     checkpoint_path = join(
-        checkpoint_dir, "{}checkpoint_step{:09d}.pth".format(prefix, global_step))
+        checkpoint_dir,
+        "{}checkpoint_step{:09d}.pth".format(prefix, global_step)
+    )
+
     optimizer_state = optimizer.state_dict() if hparams.save_optimizer_state else None
+
     torch.save({
         "state_dict": model.state_dict(),
         "optimizer": optimizer_state,
         "global_step": step,
         "global_epoch": epoch,
     }, checkpoint_path)
+
     print("Saved checkpoint:", checkpoint_path)
 
 
 def _load(checkpoint_path):
+    #
     if use_cuda:
         checkpoint = torch.load(checkpoint_path)
     else:
-        checkpoint = torch.load(checkpoint_path,
-                                map_location=lambda storage, loc: storage)
+        checkpoint = torch.load(checkpoint_path, map_location=lambda storage, loc: storage)
+
     return checkpoint
 
 
 def load_checkpoint(path, model, optimizer, reset_optimizer=False, overwrite_global_states=True):
+    #
     global global_step
     global global_epoch
 
     print("Load checkpoint from: {}".format(path))
+
     checkpoint = _load(path)
+
     s = checkpoint["state_dict"]
+
     new_s = {}
+
     for k, v in s.items():
+        #
         new_s[k.replace('module.', '')] = v
+
     model.load_state_dict(new_s)
+
     if not reset_optimizer:
+        #
         optimizer_state = checkpoint["optimizer"]
+
         if optimizer_state is not None:
+            #
             print("Load optimizer state from {}".format(path))
+
             optimizer.load_state_dict(checkpoint["optimizer"])
+
     if overwrite_global_states:
+        #
         global_step = checkpoint["global_step"]
+
         global_epoch = checkpoint["global_epoch"]
 
     return model
 
 
 if __name__ == "__main__":
+    #
     checkpoint_dir = args.checkpoint_dir
 
     # Dataset and Dataloader setup
     train_dataset = Dataset('train')
-    test_dataset = Dataset('val')
+    tests_dataset = Dataset('val')
 
     train_data_loader = data_utils.DataLoader(
-        train_dataset, batch_size=hparams.batch_size, shuffle=True,
-        num_workers=hparams.num_workers)
+        train_dataset,
+        batch_size=hparams.batch_size,
+        shuffle=True,
+        num_workers=hparams.num_workers
+    )
 
-    test_data_loader = data_utils.DataLoader(
-        test_dataset, batch_size=hparams.batch_size,
-        num_workers=4)
+    tests_data_loader = data_utils.DataLoader(
+        tests_dataset,
+        batch_size=hparams.batch_size,
+        num_workers=4
+    )
 
     device = torch.device("cuda" if use_cuda else "cpu")
 
@@ -573,26 +602,52 @@ if __name__ == "__main__":
     print('total trainable params {}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
     print('total DISC trainable params {}'.format(sum(p.numel() for p in disc.parameters() if p.requires_grad)))
 
-    optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad],
-                           lr=hparams.initial_learning_rate, betas=(0.5, 0.999))
-    disc_optimizer = optim.Adam([p for p in disc.parameters() if p.requires_grad],
-                                lr=hparams.disc_initial_learning_rate, betas=(0.5, 0.999))
+    optimizer = optim.Adam(
+        [p for p in model.parameters() if p.requires_grad],
+        lr=hparams.initial_learning_rate,
+        betas=(0.5, 0.999)
+    )
+    disc_optimizer = optim.Adam(
+        [p for p in disc.parameters() if p.requires_grad],
+        lr=hparams.disc_initial_learning_rate,
+        betas=(0.5, 0.999)
 
     if args.checkpoint_path is not None:
+    #
         load_checkpoint(args.checkpoint_path, model, optimizer, reset_optimizer=False)
 
     if args.disc_checkpoint_path is not None:
-        load_checkpoint(args.disc_checkpoint_path, disc, disc_optimizer,
-                        reset_optimizer=False, overwrite_global_states=False)
+    #
+        load_checkpoint(
+            args.disc_checkpoint_path,
+            disc,
+            disc_optimizer,
+            reset_optimizer=False,
+            overwrite_global_states=False
+        )
 
-    load_checkpoint(args.syncnet_checkpoint_path, syncnet, None, reset_optimizer=True,
-                    overwrite_global_states=False)
+    load_checkpoint(
+        args.syncnet_checkpoint_path,
+        syncnet,
+        None,
+        reset_optimizer=True,
+        overwrite_global_states=False
+    )
 
     if not os.path.exists(checkpoint_dir):
+    #
         os.mkdir(checkpoint_dir)
 
     # Train!
-    train(device, model, disc, train_data_loader, test_data_loader, optimizer, disc_optimizer,
-          checkpoint_dir=checkpoint_dir,
-          checkpoint_interval=hparams.checkpoint_interval,
-          nepochs=hparams.nepochs)
+    train(
+        device,
+        model,
+        disc,
+        train_data_loader,
+        tests_data_loader,
+        optimizer,
+        disc_optimizer,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_interval=hparams.checkpoint_interval,
+        nepochs=hparams.nepochs
+    )
