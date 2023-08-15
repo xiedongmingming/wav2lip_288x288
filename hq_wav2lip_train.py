@@ -3,15 +3,15 @@ from os.path import dirname, join, basename, isfile
 from tqdm import tqdm
 
 from models import SyncNet_color as SyncNet
-from models import Wav2Lip, Wav2Lip_disc_qual
+from models import Wav2Lip, Wav2Lip_disc_qual  # 引用新的模型
 
 import audio
 
 import torch
 
 from torch import nn
-from torch.nn import functional as F
 from torch import optim
+from torch.nn import functional as F
 
 import torch.backends.cudnn as cudnn
 
@@ -51,7 +51,7 @@ parser.add_argument(
     default=None,
     type=str
 )
-parser.add_argument(
+parser.add_argument(  # ？？？？
     '--disc_checkpoint_path',
     help='Resume quality disc from this checkpoint',
     default=None,
@@ -267,7 +267,6 @@ class Dataset(object):
 def save_sample_images(x, g, gt, global_step, checkpoint_dir):
     #
     x = (x.detach().cpu().numpy().transpose(0, 2, 3, 4, 1) * 255.).astype(np.uint8)
-
     g = (g.detach().cpu().numpy().transpose(0, 2, 3, 4, 1) * 255.).astype(np.uint8)
 
     gt = (gt.detach().cpu().numpy().transpose(0, 2, 3, 4, 1) * 255.).astype(np.uint8)
@@ -332,9 +331,9 @@ def train(
         model,
         disc,
         train_data_loader,
-        test_data_loader,
+        tests_data_loader,
         optimizer,
-        disc_optimizer,
+        disc_optimizer,  # ？？？
         checkpoint_dir=None,
         checkpoint_interval=None,
         nepochs=None
@@ -348,14 +347,15 @@ def train(
 
         print('Starting Epoch: {}'.format(global_epoch))
 
-        running_sync_loss, running_l1_loss, disc_loss, running_perceptual_loss = 0., 0., 0., 0.
-        running_disc_real_loss, running_disc_fake_loss = 0., 0.
+        running_sync_loss, running_l1_loss, disc_loss, running_perceptual_loss = 0., 0., 0., 0.  # ？
+        running_disc_real_loss, running_disc_fake_loss = 0., 0.  # ？
 
         prog_bar = tqdm(enumerate(train_data_loader))
 
         for step, (x, indiv_mels, mel, gt) in prog_bar:
 
-            disc.train()
+            disc.train()  # ？
+
             model.train()
 
             x = x.to(device)
@@ -384,8 +384,9 @@ def train(
 
             l1loss = recon_loss(g, gt)
 
-            loss = hparams.syncnet_wt * sync_loss + hparams.disc_wt * perceptual_loss + \
-                   (1. - hparams.syncnet_wt - hparams.disc_wt) * l1loss
+            loss = hparams.syncnet_wt * sync_loss + hparams.disc_wt * perceptual_loss + (
+                    1. - hparams.syncnet_wt - hparams.disc_wt
+            ) * l1loss
 
             loss.backward()
             optimizer.step()
@@ -394,10 +395,12 @@ def train(
             disc_optimizer.zero_grad()
 
             pred = disc(gt)
+
             disc_real_loss = F.binary_cross_entropy(pred, torch.ones((len(pred), 1)).to(device))
             disc_real_loss.backward()
 
             pred = disc(g.detach())
+
             disc_fake_loss = F.binary_cross_entropy(pred, torch.zeros((len(pred), 1)).to(device))
             disc_fake_loss.backward()
 
@@ -412,9 +415,11 @@ def train(
 
             # Logs
             global_step += 1
+
             cur_session_steps = global_step - resumed_step
 
             running_l1_loss += l1loss.item()
+
             if hparams.syncnet_wt > 0.:
                 running_sync_loss += sync_loss.item()
             else:
@@ -426,46 +431,76 @@ def train(
                 running_perceptual_loss += 0.
 
             if global_step == 1 or global_step % checkpoint_interval == 0:
+                #
                 save_checkpoint(
-                    model, optimizer, global_step, checkpoint_dir, global_epoch)
-                save_checkpoint(disc, disc_optimizer, global_step, checkpoint_dir, global_epoch, prefix='disc_')
+                    model,
+                    optimizer,
+                    global_step,
+                    checkpoint_dir,
+                    global_epoch
+                )
+
+                save_checkpoint(
+                    disc,
+                    disc_optimizer,
+                    global_step,
+                    checkpoint_dir,
+                    global_epoch,
+                    prefix='disc_'
+                )
 
             if global_step % hparams.eval_interval == 0:
+                #
                 with torch.no_grad():
-                    average_sync_loss = eval_model(test_data_loader, global_step, device, model, disc)
+
+                    average_sync_loss = eval_model(tests_data_loader, global_step, device, model, disc)
 
                     if average_sync_loss < .75:
+                        #
                         hparams.set_hparam('syncnet_wt', 0.03)
 
-            prog_bar.set_description(
-                'L1: {}, Sync: {}, Percep: {} | Fake: {}, Real: {}'.format(running_l1_loss / (step + 1),
-                                                                           running_sync_loss / (step + 1),
-                                                                           running_perceptual_loss / (step + 1),
-                                                                           running_disc_fake_loss / (step + 1),
-                                                                           running_disc_real_loss / (step + 1)))
+            prog_bar.set_description('L1: {}, Sync: {}, Percep: {} | Fake: {}, Real: {}'.format(
+                running_l1_loss / (step + 1),
+                running_sync_loss / (step + 1),
+                running_perceptual_loss / (step + 1),
+                running_disc_fake_loss / (step + 1),
+                running_disc_real_loss / (step + 1))
+            )
 
         global_epoch += 1
 
 
 def eval_model(test_data_loader, global_step, device, model, disc):
+    #
     eval_steps = 300
+
     print('Evaluating for {} steps'.format(eval_steps))
+
     running_sync_loss, running_l1_loss, running_disc_real_loss, running_disc_fake_loss, running_perceptual_loss = [], [], [], [], []
+
     while 1:
+
         for step, (x, indiv_mels, mel, gt) in enumerate((test_data_loader)):
+            #
             model.eval()
             disc.eval()
 
             x = x.to(device)
+
             mel = mel.to(device)
+
             indiv_mels = indiv_mels.to(device)
+
             gt = gt.to(device)
 
             pred = disc(gt)
+
             disc_real_loss = F.binary_cross_entropy(pred, torch.ones((len(pred), 1)).to(device))
 
             g = model(indiv_mels, x)
+
             pred = disc(g)
+
             disc_fake_loss = F.binary_cross_entropy(pred, torch.zeros((len(pred), 1)).to(device))
 
             running_disc_real_loss.append(disc_real_loss.item())
@@ -480,8 +515,9 @@ def eval_model(test_data_loader, global_step, device, model, disc):
 
             l1loss = recon_loss(g, gt)
 
-            loss = hparams.syncnet_wt * sync_loss + hparams.disc_wt * perceptual_loss + \
-                   (1. - hparams.syncnet_wt - hparams.disc_wt) * l1loss
+            loss = hparams.syncnet_wt * sync_loss + hparams.disc_wt * perceptual_loss + (
+                    1. - hparams.syncnet_wt - hparams.disc_wt
+            ) * l1loss
 
             running_l1_loss.append(l1loss.item())
             running_sync_loss.append(sync_loss.item())
@@ -493,23 +529,21 @@ def eval_model(test_data_loader, global_step, device, model, disc):
 
             if step > eval_steps: break
 
-        print('L1: {}, Sync: {}, Percep: {} | Fake: {}, Real: {}'.format(sum(running_l1_loss) / len(running_l1_loss),
-                                                                         sum(running_sync_loss) / len(
-                                                                             running_sync_loss),
-                                                                         sum(running_perceptual_loss) / len(
-                                                                             running_perceptual_loss),
-                                                                         sum(running_disc_fake_loss) / len(
-                                                                             running_disc_fake_loss),
-                                                                         sum(running_disc_real_loss) / len(
-                                                                             running_disc_real_loss)))
+        print('L1: {}, Sync: {}, Percep: {} | Fake: {}, Real: {}'.format(
+            sum(running_l1_loss) / len(running_l1_loss),
+            sum(running_sync_loss) / len(running_sync_loss),
+            sum(running_perceptual_loss) / len(running_perceptual_loss),
+            sum(running_disc_fake_loss) / len(running_disc_fake_loss),
+            sum(running_disc_real_loss) / len(running_disc_real_loss))
+        )
+
         return sum(running_sync_loss) / len(running_sync_loss)
 
 
 def save_checkpoint(model, optimizer, step, checkpoint_dir, epoch, prefix=''):
     #
     checkpoint_path = join(
-        checkpoint_dir,
-        "{}checkpoint_step{:09d}.pth".format(prefix, global_step)
+        checkpoint_dir, "{}checkpoint_step{:09d}.pth".format(prefix, global_step)
     )
 
     optimizer_state = optimizer.state_dict() if hparams.save_optimizer_state else None
@@ -607,17 +641,25 @@ if __name__ == "__main__":
         lr=hparams.initial_learning_rate,
         betas=(0.5, 0.999)
     )
+
     disc_optimizer = optim.Adam(
         [p for p in disc.parameters() if p.requires_grad],
         lr=hparams.disc_initial_learning_rate,
         betas=(0.5, 0.999)
 
+    )
+
     if args.checkpoint_path is not None:
-    #
-        load_checkpoint(args.checkpoint_path, model, optimizer, reset_optimizer=False)
+        #
+        load_checkpoint(
+            args.checkpoint_path,
+            model,
+            optimizer,
+            reset_optimizer=False
+        )
 
     if args.disc_checkpoint_path is not None:
-    #
+        #
         load_checkpoint(
             args.disc_checkpoint_path,
             disc,
@@ -635,7 +677,7 @@ if __name__ == "__main__":
     )
 
     if not os.path.exists(checkpoint_dir):
-    #
+        #
         os.mkdir(checkpoint_dir)
 
     # Train!

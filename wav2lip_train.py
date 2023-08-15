@@ -46,7 +46,7 @@ parser.add_argument(
 )
 parser.add_argument(
     '--checkpoint_path',
-    help='Resume from this checkpoint',
+    help='Resume generator from this checkpoint',
     default=None,
     type=str
 )
