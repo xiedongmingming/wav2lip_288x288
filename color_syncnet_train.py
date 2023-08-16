@@ -27,18 +27,18 @@ parser = argparse.ArgumentParser(description='Code to train the expert lip-sync 
 
 parser.add_argument(
     "--data_root",
-    help="Root folder of the preprocessed LRS2 dataset",
+    help="root folder of the preprocessed lrs2 dataset",
     required=True
 )
 parser.add_argument(
     '--checkpoint_dir',
-    help='Save checkpoints to this directory',
+    help='save checkpoints to this directory',
     required=True,
     type=str
 )
 parser.add_argument(
     '--checkpoint_path',
-    help='Resumed from this checkpoint',
+    help='resumed from this checkpoint',
     default=None,
     type=str
 )
@@ -115,14 +115,13 @@ class Dataset(object):
             if len(img_names) <= 3 * syncnet_T:
                 #
                 # print('视频帧总是不足：{}'.format(vidname))
-
+                #
                 continue
 
-            img_name = random.choice(img_names)  # 正样本
-
+            right_img_name = random.choice(img_names)  # 正样本
             wrong_img_name = random.choice(img_names)  # 负样本
 
-            while wrong_img_name == img_name:
+            while wrong_img_name == right_img_name:
                 #
                 wrong_img_name = random.choice(img_names)
 
@@ -130,7 +129,7 @@ class Dataset(object):
 
                 y = torch.ones(1).float()
 
-                chosen = img_name
+                chosen = right_img_name
 
             else:  # 构造负标签
 
@@ -143,7 +142,7 @@ class Dataset(object):
             if window_fnames is None:
                 #
                 # print('视频窗口为空：{}'.format(chosen))
-
+                #
                 continue
 
             window = []
@@ -194,7 +193,7 @@ class Dataset(object):
 
                 continue
 
-            mel = self.crop_audio_window(orig_mel.copy(), img_name)  # 正样本对应的音频数据：{ndarray: {16, 80}}
+            mel = self.crop_audio_window(orig_mel.copy(), right_img_name)  # 正样本对应的音频数据：{ndarray: {16, 80}}
 
             if mel.shape[0] != syncnet_mel_step_size:
                 #
@@ -207,13 +206,13 @@ class Dataset(object):
             x = x.transpose(2, 0, 1)  # {ndarray: (15, 288, 288)}
             x = x[:, x.shape[1] // 2:]  # {ndarray: (15, 288//2, 288)}--将第一个数字除以第二个数字并将结果向下舍入为最接近的整数
 
-            x = torch.FloatTensor(x)  # {Tensor: (15, 144//2, 288)}
+            x = torch.FloatTensor(x)  # {Tensor: (15, 288//2, 288)}
 
             mel = torch.FloatTensor(mel.T).unsqueeze(0)
 
-            # x: {Tensor: (15, 144, 288)} --> [N, C, H, W]
-            # y: {Tensor: (1,)}
-            # mel: {Tensor: (1, 80, 16)} --> 80：属性数量 16：样本数
+            # x: {Tensor: (15, 144, 288)} --> 正/负样本的输入(200MS内5张图片数据合并--只保留下半部分)：[N, C, H, W]
+            # y: {Tensor: (1,)}           --> 正负样本对应的标签
+            # mel: {Tensor: (1, 80, 16)}  --> 正样本时200MS内的音频数：80--属性数量；16--样本数
 
             return x, mel, y
 
@@ -223,7 +222,11 @@ logloss = nn.BCELoss()
 
 def cosine_loss(a, v, y):
     #
-    d = nn.functional.cosine_similarity(a, v)
+    # a--audio
+    # v--faces
+    # y--labels
+    #
+    d = nn.functional.cosine_similarity(a, v)  # 距离越近COSINE越接近1（否则越接近0）
 
     loss = logloss(d.unsqueeze(1), y)
 
@@ -232,10 +235,10 @@ def cosine_loss(a, v, y):
 
 def train(
         device,
-        model,
+        syncnet_model,
         train_data_loader,
         test_data_loader,
-        optimizer,
+        syncnet_optimizer,
         checkpoint_dir=None,
         checkpoint_interval=None,
         nepochs=None
@@ -252,16 +255,20 @@ def train(
         prog_bar = tqdm(enumerate(train_data_loader))
 
         for step, (x, mel, y) in prog_bar:
+            #
+            # x: {Tensor: (15, 144, 288)} --> 正/负样本的输入(200MS内5张图片数据合并--只保留下半部分)：[N, C, H, W]
+            # y: {Tensor: (1,)}           --> 正负样本对应的标签
+            # mel: {Tensor: (1, 80, 16)}  --> 正样本时200MS内的音频数：80--属性数量；16--样本数
+            #
+            syncnet_model.train()
 
-            model.train()
-
-            optimizer.zero_grad()
+            syncnet_optimizer.zero_grad()
 
             x = x.to(device)  # transform data to cuda device
 
             mel = mel.to(device)
 
-            a, v = model(mel, x)
+            a, v = syncnet_model(mel, x)  # 200MS音频+5张下半部分脸部数据->AUDIO+FACES
 
             y = y.to(device)
 
@@ -269,19 +276,19 @@ def train(
 
             loss.backward()
 
-            optimizer.step()
+            syncnet_optimizer.step()
 
             global_step += 1
 
             cur_session_steps = global_step - resumed_step
 
-            running_loss += loss.item()
+            running_loss += loss.item()  # LOSS和值
 
             if global_step == 1 or global_step % checkpoint_interval == 0:
                 #
                 save_checkpoint(
-                    model,
-                    optimizer,
+                    syncnet_model,
+                    syncnet_optimizer,
                     global_step,
                     checkpoint_dir,
                     global_epoch
@@ -295,11 +302,11 @@ def train(
                         test_data_loader,
                         global_step,
                         device,
-                        model,
+                        syncnet_model,
                         checkpoint_dir
                     )
 
-            prog_bar.set_description('Loss: {}'.format(running_loss / (step + 1)))
+            prog_bar.set_description('loss: {}'.format(running_loss / (step + 1)))
 
         global_epoch += 1
 
@@ -374,7 +381,7 @@ def load_checkpoint(path, model, optimizer, reset_optimizer=False):
     global global_step
     global global_epoch
 
-    print("Load checkpoint from: {}".format(path))
+    print("load checkpoint from: {}".format(path))
 
     checkpoint = _load(path)
 
@@ -386,7 +393,7 @@ def load_checkpoint(path, model, optimizer, reset_optimizer=False):
 
         if optimizer_state is not None:
             #
-            print("Load optimizer state from {}".format(path))
+            print("load optimizer state from {}".format(path))
 
             optimizer.load_state_dict(checkpoint["optimizer"])
 
@@ -419,6 +426,7 @@ if __name__ == "__main__":
     tests_data_loader = data_utils.DataLoader(
         tests_dataset,
         batch_size=hparams.syncnet_batch_size,
+        # shuffle=True,
         num_workers=8
     )
 
@@ -426,25 +434,27 @@ if __name__ == "__main__":
 
     ###################################################################
     # 模型
-    model = SyncNet().to(device)
+    syncnet_model = SyncNet().to(device)
 
-    print('total trainable params {}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
+    print('total trainable params: syncnet {}'.format(
+        sum(p.numel() for p in syncnet_model.parameters() if p.requires_grad)
+    ))
 
-    optimizer = optim.Adam(
-        [p for p in model.parameters() if p.requires_grad],
+    syncnet_optimizer = optim.Adam(
+        [p for p in syncnet_model.parameters() if p.requires_grad],
         lr=hparams.syncnet_lr
     )
 
     if checkpoint_path is not None:
         #
-        load_checkpoint(checkpoint_path, model, optimizer, reset_optimizer=False)
+        load_checkpoint(checkpoint_path, syncnet_model, syncnet_optimizer, reset_optimizer=False)
 
     train(
         device,
-        model,
+        syncnet_model,
         train_data_loader,
         tests_data_loader,
-        optimizer,
+        syncnet_optimizer,
         checkpoint_dir=checkpoint_dir,
         checkpoint_interval=hparams.syncnet_checkpoint_interval,
         nepochs=hparams.nepochs
