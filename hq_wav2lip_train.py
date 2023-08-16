@@ -302,9 +302,9 @@ def cosine_loss(a, v, y):
 
 device = torch.device("cuda" if use_cuda else "cpu")
 
-syncnet = SyncNet().to(device)
+syncnet_model = SyncNet().to(device)
 
-for p in syncnet.parameters():
+for p in syncnet_model.parameters():
     #
     p.requires_grad = False
 
@@ -319,7 +319,7 @@ def get_sync_loss(mel, g):
     #
     # B, 3 * T, H//2, W
     #
-    a, v = syncnet(mel, g)
+    a, v = syncnet_model(mel, g)
 
     y = torch.ones(g.size(0), 1).float().to(device)
 
@@ -328,12 +328,12 @@ def get_sync_loss(mel, g):
 
 def train(
         device,
-        model,
-        disc,
+        wav2lip_model,
+        wavdisc_model,
         train_data_loader,
         tests_data_loader,
-        optimizer,
-        disc_optimizer,  # ？？？
+        wav2lip_optimizer,
+        wavdisc_optimizer,  # ？？？
         checkpoint_dir=None,
         checkpoint_interval=None,
         nepochs=None
@@ -353,10 +353,16 @@ def train(
         prog_bar = tqdm(enumerate(train_data_loader))
 
         for step, (x, indiv_mels, mel, gt) in prog_bar:
-
-            disc.train()  # ？
-
-            model.train()
+            #
+            # x: {Tensor: (6, 5, 96, 96)} -- 正样本[下半部分空]+负样本
+            # y: {Tensor: (3, 5, 96, 96)} -- 正样本
+            #
+            # mel: {Tensor: (1, 80, 16)} -- 正样本音频
+            #
+            # indiv_mels: {Tensor: (5, 1, 80, 16)} -- 正样本[-1:4]音频(共5个)
+            #
+            wavdisc_model.train()  # ？
+            wav2lip_model.train()
 
             x = x.to(device)
 
@@ -366,11 +372,11 @@ def train(
 
             gt = gt.to(device)
 
-            ### Train generator now. Remove ALL grads. 
-            optimizer.zero_grad()
-            disc_optimizer.zero_grad()
+            # train generator now. remove all grads.
+            wav2lip_optimizer.zero_grad()
+            wavdisc_optimizer.zero_grad()
 
-            g = model(indiv_mels, x)
+            g = wav2lip_model(indiv_mels, x)  # 根据音频和参考生成
 
             if hparams.syncnet_wt > 0.:
                 sync_loss = get_sync_loss(mel, g)
@@ -378,7 +384,7 @@ def train(
                 sync_loss = 0.
 
             if hparams.disc_wt > 0.:
-                perceptual_loss = disc.perceptual_forward(g)
+                perceptual_loss = wavdisc_model.perceptual_forward(g)
             else:
                 perceptual_loss = 0.
 
@@ -389,22 +395,23 @@ def train(
             ) * l1loss
 
             loss.backward()
-            optimizer.step()
 
-            ### Remove all gradients before Training disc
-            disc_optimizer.zero_grad()
+            wav2lip_optimizer.step()
 
-            pred = disc(gt)
+            # remove all gradients before training disc
+            wavdisc_optimizer.zero_grad()
+
+            pred = wavdisc_model(gt)
 
             disc_real_loss = F.binary_cross_entropy(pred, torch.ones((len(pred), 1)).to(device))
             disc_real_loss.backward()
 
-            pred = disc(g.detach())
+            pred = wavdisc_model(g.detach())
 
             disc_fake_loss = F.binary_cross_entropy(pred, torch.zeros((len(pred), 1)).to(device))
             disc_fake_loss.backward()
 
-            disc_optimizer.step()
+            wavdisc_optimizer.step()
 
             running_disc_real_loss += disc_real_loss.item()
             running_disc_fake_loss += disc_fake_loss.item()
@@ -433,16 +440,16 @@ def train(
             if global_step == 1 or global_step % checkpoint_interval == 0:
                 #
                 save_checkpoint(
-                    model,
-                    optimizer,
+                    wav2lip_model,
+                    wav2lip_optimizer,
                     global_step,
                     checkpoint_dir,
                     global_epoch
                 )
 
                 save_checkpoint(
-                    disc,
-                    disc_optimizer,
+                    wavdisc_model,
+                    wavdisc_optimizer,
                     global_step,
                     checkpoint_dir,
                     global_epoch,
@@ -453,7 +460,7 @@ def train(
                 #
                 with torch.no_grad():
 
-                    average_sync_loss = eval_model(tests_data_loader, global_step, device, model, disc)
+                    average_sync_loss = eval_model(tests_data_loader, global_step, device, wav2lip_model, wavdisc_model)
 
                     if average_sync_loss < .75:
                         #
@@ -610,7 +617,7 @@ if __name__ == "__main__":
     #
     checkpoint_dir = args.checkpoint_dir
 
-    # Dataset and Dataloader setup
+    # dataset and dataloader setup
     train_dataset = Dataset('train')
     tests_dataset = Dataset('val')
 
@@ -629,21 +636,23 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if use_cuda else "cpu")
 
-    # Model
-    model = Wav2Lip().to(device)
-    disc = Wav2Lip_disc_qual().to(device)
+    # model
+    wav2lip_model = Wav2Lip().to(device)
+    wavdisc_model = Wav2Lip_disc_qual().to(device)
 
-    print('total trainable params {}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
-    print('total DISC trainable params {}'.format(sum(p.numel() for p in disc.parameters() if p.requires_grad)))
+    print('total trainable params: wav2lip_model {}'.format(
+        sum(p.numel() for p in wav2lip_model.parameters() if p.requires_grad)))
+    print('total trainable params: wavdisc_model {}'.format(
+        sum(p.numel() for p in wavdisc_model.parameters() if p.requires_grad)))
 
-    optimizer = optim.Adam(
-        [p for p in model.parameters() if p.requires_grad],
+    wav2lip_optimizer = optim.Adam(
+        [p for p in wav2lip_model.parameters() if p.requires_grad],
         lr=hparams.initial_learning_rate,
         betas=(0.5, 0.999)
     )
 
-    disc_optimizer = optim.Adam(
-        [p for p in disc.parameters() if p.requires_grad],
+    wavdisc_optimizer = optim.Adam(
+        [p for p in wavdisc_model.parameters() if p.requires_grad],
         lr=hparams.disc_initial_learning_rate,
         betas=(0.5, 0.999)
 
@@ -653,8 +662,8 @@ if __name__ == "__main__":
         #
         load_checkpoint(
             args.checkpoint_path,
-            model,
-            optimizer,
+            wav2lip_model,
+            wav2lip_optimizer,
             reset_optimizer=False
         )
 
@@ -662,15 +671,15 @@ if __name__ == "__main__":
         #
         load_checkpoint(
             args.disc_checkpoint_path,
-            disc,
-            disc_optimizer,
+            wavdisc_model,
+            wavdisc_optimizer,
             reset_optimizer=False,
             overwrite_global_states=False
         )
 
     load_checkpoint(
         args.syncnet_checkpoint_path,
-        syncnet,
+        syncnet_model,
         None,
         reset_optimizer=True,
         overwrite_global_states=False
@@ -683,12 +692,12 @@ if __name__ == "__main__":
     # Train!
     train(
         device,
-        model,
-        disc,
+        wav2lip_model,
+        wavdisc_model,
         train_data_loader,
         tests_data_loader,
-        optimizer,
-        disc_optimizer,
+        wav2lip_optimizer,
+        wavdisc_optimizer,
         checkpoint_dir=checkpoint_dir,
         checkpoint_interval=hparams.checkpoint_interval,
         nepochs=hparams.nepochs

@@ -246,7 +246,14 @@ class Dataset(object):
             indiv_mels = torch.FloatTensor(indiv_mels).unsqueeze(1)
 
             y = torch.FloatTensor(y)
-
+            #
+            # x: {Tensor: (6, 5, 96, 96)} -- 正样本[下半部分空]+负样本
+            # y: {Tensor: (3, 5, 96, 96)} -- 正样本
+            #
+            # mel: {Tensor: (1, 80, 16)} -- 正样本音频
+            #
+            # indiv_mels: {Tensor: (5, 1, 80, 16)} -- 正样本[-1:4]音频(共5个)
+            #
             return x, indiv_mels, mel, y
 
 
@@ -286,9 +293,9 @@ def cosine_loss(a, v, y):
 
 device = torch.device("cuda" if use_cuda else "cpu")
 
-syncnet = SyncNet().to(device)
+syncnet_model = SyncNet().to(device)
 
-for p in syncnet.parameters():
+for p in syncnet_model.parameters():
     #
     p.requires_grad = False
 
@@ -303,7 +310,7 @@ def get_sync_loss(mel, g):
     #
     # B, 3 * T, H//2, W
     #
-    a, v = syncnet(mel, g)
+    a, v = syncnet_model(mel, g)
 
     y = torch.ones(g.size(0), 1).float().to(device)
 
@@ -312,10 +319,10 @@ def get_sync_loss(mel, g):
 
 def train(
         device,
-        model,
+        wav2lip_model,
         train_data_loader,
-        test_data_loader,
-        optimizer,
+        tests_data_loader,
+        wav2lip_optimizer,
         checkpoint_dir=None,
         checkpoint_interval=None,
         nepochs=None
@@ -335,33 +342,39 @@ def train(
 
         for step, (x, indiv_mels, mel, gt) in prog_bar:
             #
-            model.train()
+            # x: {Tensor: (6, 5, 96, 96)} -- 正样本[下半部分空]+负样本
+            # y: {Tensor: (3, 5, 96, 96)} -- 正样本
+            #
+            # mel: {Tensor: (1, 80, 16)} -- 正样本音频
+            #
+            # indiv_mels: {Tensor: (5, 1, 80, 16)} -- 正样本[-1:4]音频(共5个)
+            #
+            wav2lip_model.train()  # 训练模式
 
-            optimizer.zero_grad()
+            wav2lip_optimizer.zero_grad()
 
-            # Move data to CUDA device
-            x = x.to(device)
+            x = x.to(device)  # move data to cuda device
 
             mel = mel.to(device)
 
             indiv_mels = indiv_mels.to(device)
 
-            gt = gt.to(device)
+            gt = gt.to(device)  # 标签
 
-            g = model(indiv_mels, x)
+            g = wav2lip_model(indiv_mels, x)  # 模型生成的数据
 
             if hparams.syncnet_wt > 0.:
                 sync_loss = get_sync_loss(mel, g)
             else:
                 sync_loss = 0.
 
-            l1loss = recon_loss(g, gt)
+            l1loss = recon_loss(g, gt)  # L1损失函数--预测与真实值的差的绝对值后再求平均
 
             loss = hparams.syncnet_wt * sync_loss + (1 - hparams.syncnet_wt) * l1loss
 
             loss.backward()
 
-            optimizer.step()
+            wav2lip_optimizer.step()  # ？？？
 
             if global_step % checkpoint_interval == 0:
                 #
@@ -381,8 +394,8 @@ def train(
             if global_step == 1 or global_step % checkpoint_interval == 0:
                 #
                 save_checkpoint(
-                    model,
-                    optimizer,
+                    wav2lip_model,
+                    wav2lip_optimizer,
                     global_step,
                     checkpoint_dir,
                     global_epoch
@@ -392,7 +405,13 @@ def train(
 
                 with torch.no_grad():
 
-                    average_sync_loss = eval_model(test_data_loader, global_step, device, model, checkpoint_dir)
+                    average_sync_loss = eval_model(
+                        tests_data_loader,
+                        global_step,
+                        device,
+                        wav2lip_model,
+                        checkpoint_dir
+                    )
 
                     if average_sync_loss < .75:
                         #
@@ -407,6 +426,7 @@ def train(
 
 
 def eval_model(test_data_loader, global_step, device, model, checkpoint_dir):
+    #
     eval_steps = 700
 
     print('Evaluating for {} steps'.format(eval_steps))
@@ -526,7 +546,7 @@ if __name__ == "__main__":
 
     # dataset and dataloader setup
     train_dataset = Dataset('train')
-    test_dataset = Dataset('val')
+    tests_dataset = Dataset('val')
 
     train_data_loader = data_utils.DataLoader(
         train_dataset,
@@ -535,29 +555,41 @@ if __name__ == "__main__":
         num_workers=hparams.num_workers
     )
 
-    test_data_loader = data_utils.DataLoader(
-        test_dataset,
+    tests_data_loader = data_utils.DataLoader(
+        tests_dataset,
         batch_size=hparams.batch_size,
+        # shuffle=False,
         num_workers=4
     )
 
     device = torch.device("cuda" if use_cuda else "cpu")
 
     # model
-    model = Wav2Lip().to(device)
+    wav2lip_model = Wav2Lip().to(device)
 
-    print('total trainable params {}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
+    print('total trainable params: wav2lip {}'.format(sum(p.numel() for p in wav2lip_model.parameters() if p.requires_grad)))
 
-    optimizer = optim.Adam(
-        [p for p in model.parameters() if p.requires_grad],
+    wav2lip_optimizer = optim.Adam(
+        [p for p in wav2lip_model.parameters() if p.requires_grad],
         lr=hparams.initial_learning_rate
     )
 
     if args.checkpoint_path is not None:
         #
-        load_checkpoint(args.checkpoint_path, model, optimizer, reset_optimizer=False)
+        load_checkpoint(
+            args.checkpoint_path,
+            wav2lip_model,
+            wav2lip_optimizer,
+            reset_optimizer=False
+        )
 
-    load_checkpoint(args.syncnet_checkpoint_path, syncnet, None, reset_optimizer=True, overwrite_global_states=False)
+    load_checkpoint(
+        args.syncnet_checkpoint_path,
+        syncnet_model,
+        None,
+        reset_optimizer=True,
+        overwrite_global_states=False
+    )
 
     if not os.path.exists(checkpoint_dir):
         #
@@ -566,10 +598,10 @@ if __name__ == "__main__":
     # train!
     train(
         device,
-        model,
+        wav2lip_model,
         train_data_loader,
-        test_data_loader,
-        optimizer,
+        tests_data_loader,
+        wav2lip_optimizer,
         checkpoint_dir=checkpoint_dir,
         checkpoint_interval=hparams.checkpoint_interval,
         nepochs=hparams.nepochs
