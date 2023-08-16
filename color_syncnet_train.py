@@ -325,7 +325,11 @@ def eval_model(test_data_loader, global_steps, device, model, checkpoint_dir):
     while 1:
 
         for step, (x, mel, y) in enumerate(test_data_loader):
-
+            #
+            # x: {Tensor: (15, 144, 288)} --> 正/负样本的输入(200MS内5张图片数据合并--只保留下半部分)：[N, C, H, W]
+            # y: {Tensor: (1,)}           --> 正负样本对应的标签
+            # mel: {Tensor: (1, 80, 16)}  --> 正样本时200MS内的音频数：80--属性数量；16--样本数
+            #
             model.eval()
 
             x = x.to(device)  # transform data to cuda device
