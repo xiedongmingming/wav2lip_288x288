@@ -24,36 +24,38 @@ import os, random, cv2, argparse
 
 from hparams import hparams, get_image_list
 
-parser = argparse.ArgumentParser(description='Code to train the Wav2Lip model without the visual quality discriminator')
+############################################################################################
+parser = argparse.ArgumentParser(description='code to train the wav2lip model without the visual quality discriminator')
 
 parser.add_argument(
     "--data_root",
-    help="Root folder of the preprocessed LRS2 dataset",
+    help="root folder of the preprocessed lrs2 dataset",
     required=True,
     type=str
 )
 parser.add_argument(
     '--checkpoint_dir',
-    help='Save checkpoints to this directory',
+    help='save checkpoints to this directory',
     required=True,
     type=str
 )
 parser.add_argument(
     '--syncnet_checkpoint_path',
-    help='Load the pre-trained Expert discriminator',
+    help='load the pre-trained expert discriminator',
     required=True,
     type=str
 )
 parser.add_argument(
     '--checkpoint_path',
-    help='Resume generator from this checkpoint',
+    help='resume generator from this checkpoint',
     default=None,
     type=str
 )
 
 args = parser.parse_args()
 
-global_step = 0
+############################################################################################
+global_steps = 0
 global_epoch = 0
 
 use_cuda = torch.cuda.is_available()
@@ -179,25 +181,23 @@ class Dataset(object):
                 #
                 continue
 
-            img_name = random.choice(img_names)
-
+            right_img_name = random.choice(img_names)
             wrong_img_name = random.choice(img_names)
 
-            while wrong_img_name == img_name:
+            while wrong_img_name == right_img_name:
                 #
                 wrong_img_name = random.choice(img_names)
 
-            window_fnames = self.get_window(img_name)
-
+            right_window_fnames = self.get_window(right_img_name)
             wrong_window_fnames = self.get_window(wrong_img_name)
 
-            if window_fnames is None or wrong_window_fnames is None:
+            if right_window_fnames is None or wrong_window_fnames is None:
                 #
                 continue
 
-            window = self.read_window(window_fnames)
+            right_window = self.read_window(right_window_fnames)
 
-            if window is None:
+            if right_window is None:
                 #
                 continue
 
@@ -219,25 +219,27 @@ class Dataset(object):
 
                 continue
 
-            mel = self.crop_audio_window(orig_mel.copy(), img_name)
+            mel = self.crop_audio_window(orig_mel.copy(), right_img_name)
 
             if (mel.shape[0] != syncnet_mel_step_size):
                 #
                 continue
 
-            indiv_mels = self.get_segmented_mels(orig_mel.copy(), img_name)
+            indiv_mels = self.get_segmented_mels(orig_mel.copy(), right_img_name)
 
-            if indiv_mels is None: continue
+            if indiv_mels is None:
+                #
+                continue
 
-            window = self.prepare_window(window)
+            right_window = self.prepare_window(right_window)
 
-            y = window.copy()
+            y = right_window.copy()
 
-            window[:, :, window.shape[2] // 2:] = 0.
+            right_window[:, :, right_window.shape[2] // 2:] = 0.
 
             wrong_window = self.prepare_window(wrong_window)
 
-            x = np.concatenate([window, wrong_window], axis=0)
+            x = np.concatenate([right_window, wrong_window], axis=0)
 
             x = torch.FloatTensor(x)
 
@@ -257,7 +259,7 @@ class Dataset(object):
             return x, indiv_mels, mel, y
 
 
-def save_sample_images(x, g, gt, global_step, checkpoint_dir):
+def save_sample_images(x, g, gt, global_steps, checkpoint_dir):
     #
     x = (x.detach().cpu().numpy().transpose(0, 2, 3, 4, 1) * 255.).astype(np.uint8)
     g = (g.detach().cpu().numpy().transpose(0, 2, 3, 4, 1) * 255.).astype(np.uint8)
@@ -266,7 +268,7 @@ def save_sample_images(x, g, gt, global_step, checkpoint_dir):
 
     refs, inps = x[..., 3:], x[..., :3]
 
-    folder = join(checkpoint_dir, "samples_step{:09d}".format(global_step))
+    folder = join(checkpoint_dir, "samples_step{:09d}".format(global_steps))
 
     if not os.path.exists(folder): os.mkdir(folder)
 
@@ -328,13 +330,13 @@ def train(
         nepochs=None
 ):
     #
-    global global_step, global_epoch
+    global global_steps, global_epoch
 
-    resumed_step = global_step
+    resumed_steps = global_steps
 
     while global_epoch < nepochs:
 
-        print('Starting Epoch: {}'.format(global_epoch))
+        print('starting epoch: {}'.format(global_epoch))
 
         running_sync_loss, running_l1_loss = 0., 0.
 
@@ -376,13 +378,13 @@ def train(
 
             wav2lip_optimizer.step()  # ？？？
 
-            if global_step % checkpoint_interval == 0:
+            if global_steps % checkpoint_interval == 0:
                 #
-                save_sample_images(x, g, gt, global_step, checkpoint_dir)
+                save_sample_images(x, g, gt, global_steps, checkpoint_dir)
 
-            global_step += 1
+            global_steps += 1
 
-            cur_session_steps = global_step - resumed_step
+            cur_session_steps = global_steps - resumed_steps
 
             running_l1_loss += l1loss.item()
 
@@ -391,23 +393,23 @@ def train(
             else:
                 running_sync_loss += 0.
 
-            if global_step == 1 or global_step % checkpoint_interval == 0:
+            if global_steps == 1 or global_steps % checkpoint_interval == 0:
                 #
                 save_checkpoint(
                     wav2lip_model,
                     wav2lip_optimizer,
-                    global_step,
+                    global_steps,
                     checkpoint_dir,
                     global_epoch
                 )
 
-            if global_step == 1 or global_step % hparams.eval_interval == 0:
+            if global_steps == 1 or global_steps % hparams.eval_interval == 0:
 
                 with torch.no_grad():
 
                     average_sync_loss = eval_model(
                         tests_data_loader,
-                        global_step,
+                        global_steps,
                         device,
                         wav2lip_model,
                         checkpoint_dir
@@ -415,7 +417,7 @@ def train(
 
                     if average_sync_loss < .75:
                         #
-                        hparams.set_hparam('syncnet_wt', 0.01)  # without image GAN a lesser weight is sufficient
+                        hparams.set_hparam('syncnet_wt', 0.01)  # without image gan a lesser weight is sufficient
 
             prog_bar.set_description('L1: {}, Sync Loss: {}'.format(
                 running_l1_loss / (step + 1),
@@ -425,7 +427,7 @@ def train(
         global_epoch += 1
 
 
-def eval_model(test_data_loader, global_step, device, model, checkpoint_dir):
+def eval_model(test_data_loader, global_steps, device, model, checkpoint_dir):
     #
     eval_steps = 700
 
@@ -472,10 +474,10 @@ def eval_model(test_data_loader, global_step, device, model, checkpoint_dir):
                 return averaged_sync_loss
 
 
-def save_checkpoint(model, optimizer, step, checkpoint_dir, epoch):
+def save_checkpoint(model, optimizer, steps, checkpoint_dir, epoch):
     #
     checkpoint_path = join(
-        checkpoint_dir, "checkpoint_step{:09d}.pth".format(global_step)
+        checkpoint_dir, "checkpoint_step{:09d}.pth".format(global_steps)
     )
 
     optimizer_state = optimizer.state_dict() if hparams.save_optimizer_state else None
@@ -484,7 +486,7 @@ def save_checkpoint(model, optimizer, step, checkpoint_dir, epoch):
         {
             "state_dict": model.state_dict(),
             "optimizer": optimizer_state,
-            "global_step": step,
+            "global_steps": steps,
             "global_epoch": epoch,
         },
         checkpoint_path
@@ -505,7 +507,7 @@ def _load(checkpoint_path):
 
 def load_checkpoint(path, model, optimizer, reset_optimizer=False, overwrite_global_states=True):
     #
-    global global_step
+    global global_steps
     global global_epoch
 
     print("Load checkpoint from: {}".format(path))
@@ -534,7 +536,7 @@ def load_checkpoint(path, model, optimizer, reset_optimizer=False, overwrite_glo
 
     if overwrite_global_states:
         #
-        global_step = checkpoint["global_step"]
+        global_steps = checkpoint["global_steps"]
         global_epoch = checkpoint["global_epoch"]
 
     return model
@@ -567,7 +569,9 @@ if __name__ == "__main__":
     # model
     wav2lip_model = Wav2Lip().to(device)
 
-    print('total trainable params: wav2lip {}'.format(sum(p.numel() for p in wav2lip_model.parameters() if p.requires_grad)))
+    print('total trainable params: wav2lip {}'.format(
+        sum(p.numel() for p in wav2lip_model.parameters() if p.requires_grad)
+    ))
 
     wav2lip_optimizer = optim.Adam(
         [p for p in wav2lip_model.parameters() if p.requires_grad],

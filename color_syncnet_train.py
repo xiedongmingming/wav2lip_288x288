@@ -23,7 +23,7 @@ import os, random, cv2, argparse
 
 from hparams import hparams, get_image_list
 
-parser = argparse.ArgumentParser(description='Code to train the expert lip-sync discriminator')
+parser = argparse.ArgumentParser(description='code to train the expert lip-sync discriminator')
 
 parser.add_argument(
     "--data_root",
@@ -45,17 +45,20 @@ parser.add_argument(
 
 args = parser.parse_args()
 
-global_step = 0
-global_epoch = 0
+########################################################
+# 全局变量
+global_steps = 0  # 以EPOCH为周期
+global_epoch = 0  # 一个EPOCH表示遍历一遍训练数据集
 
 use_cuda = torch.cuda.is_available()
 
-print('use_cuda: {}'.format(use_cuda))
+# print('use_cuda: {}'.format(use_cuda))
 
 syncnet_T = 5
 syncnet_mel_step_size = 16
 
 
+########################################################
 class Dataset(object):
     #
     def __init__(self, split):
@@ -244,9 +247,9 @@ def train(
         nepochs=None
 ):
     #
-    global global_step, global_epoch
+    global global_steps, global_epoch
 
-    resumed_step = global_step
+    resumed_steps = global_steps
 
     while global_epoch < nepochs:
 
@@ -278,29 +281,29 @@ def train(
 
             syncnet_optimizer.step()
 
-            global_step += 1
+            global_steps += 1
 
-            cur_session_steps = global_step - resumed_step
+            cur_session_steps = global_steps - resumed_steps
 
             running_loss += loss.item()  # LOSS和值
 
-            if global_step == 1 or global_step % checkpoint_interval == 0:
+            if global_steps == 1 or global_steps % checkpoint_interval == 0:
                 #
                 save_checkpoint(
                     syncnet_model,
                     syncnet_optimizer,
-                    global_step,
+                    global_steps,
                     checkpoint_dir,
                     global_epoch
                 )
 
-            if global_step % hparams.syncnet_eval_interval == 0:
+            if global_steps % hparams.syncnet_eval_interval == 0:
                 #
                 with torch.no_grad():
                     #
                     eval_model(
                         test_data_loader,
-                        global_step,
+                        global_steps,
                         device,
                         syncnet_model,
                         checkpoint_dir
@@ -311,18 +314,22 @@ def train(
         global_epoch += 1
 
 
-def eval_model(test_data_loader, global_step, device, model, checkpoint_dir):
+def eval_model(test_data_loader, global_steps, device, model, checkpoint_dir):
     #
     eval_steps = 1400
 
-    print('Evaluating for {} steps'.format(eval_steps))
+    print('evaluating for {} steps'.format(eval_steps))
 
     losses = []
 
     while 1:
 
         for step, (x, mel, y) in enumerate(test_data_loader):
-
+            #
+            # x: {Tensor: (15, 144, 288)} --> 正/负样本的输入(200MS内5张图片数据合并--只保留下半部分)：[N, C, H, W]
+            # y: {Tensor: (1,)}           --> 正负样本对应的标签
+            # mel: {Tensor: (1, 80, 16)}  --> 正样本时200MS内的音频数：80--属性数量；16--样本数
+            #
             model.eval()
 
             x = x.to(device)  # transform data to cuda device
@@ -334,21 +341,24 @@ def eval_model(test_data_loader, global_step, device, model, checkpoint_dir):
             y = y.to(device)
 
             loss = cosine_loss(a, v, y)
+
             losses.append(loss.item())
 
-            if step > eval_steps: break
+            if step > eval_steps:
+                #
+                break
 
         averaged_loss = sum(losses) / len(losses)
 
-        print(averaged_loss)
+        print(averaged_loss)  # 平均损失值
 
         return
 
 
-def save_checkpoint(model, optimizer, step, checkpoint_dir, epoch):
+def save_checkpoint(model, optimizer, steps, checkpoint_dir, epoch):
     #
     checkpoint_path = join(
-        checkpoint_dir, "checkpoint_step{:09d}.pth".format(global_step)
+        checkpoint_dir, "checkpoint_step{:09d}.pth".format(global_steps)
     )
 
     optimizer_state = optimizer.state_dict() if hparams.save_optimizer_state else None
@@ -357,13 +367,13 @@ def save_checkpoint(model, optimizer, step, checkpoint_dir, epoch):
         {
             "state_dict": model.state_dict(),
             "optimizer": optimizer_state,
-            "global_step": step,
+            "global_steps": steps,
             "global_epoch": epoch,
         },
         checkpoint_path
     )
 
-    print("Saved checkpoint:", checkpoint_path)
+    print("saved checkpoint:", checkpoint_path)
 
 
 def _load(checkpoint_path):
@@ -378,7 +388,7 @@ def _load(checkpoint_path):
 
 def load_checkpoint(path, model, optimizer, reset_optimizer=False):
     #
-    global global_step
+    global global_steps
     global global_epoch
 
     print("load checkpoint from: {}".format(path))
@@ -387,7 +397,7 @@ def load_checkpoint(path, model, optimizer, reset_optimizer=False):
 
     model.load_state_dict(checkpoint["state_dict"])
 
-    if not reset_optimizer:
+    if not reset_optimizer:  # 需要加载优化器
 
         optimizer_state = checkpoint["optimizer"]
 
@@ -397,7 +407,7 @@ def load_checkpoint(path, model, optimizer, reset_optimizer=False):
 
             optimizer.load_state_dict(checkpoint["optimizer"])
 
-    global_step = checkpoint["global_step"]
+    global_steps = checkpoint["global_steps"]  # 这俩是定制参数
     global_epoch = checkpoint["global_epoch"]
 
     return model
