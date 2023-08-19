@@ -19,8 +19,8 @@ class SyncNet_color(nn.Module):
 
             Conv2d(15, 32, kernel_size=(7, 7), stride=1, padding=3),
 
-            Conv2d(32, 32, kernel_size=5, stride=1, padding=1),  # 网络调整部分
-            Conv2d(32, 32, kernel_size=5, stride=1, padding=1),  # 网络调整部分
+            Conv2d(32, 32, kernel_size=5, stride=1, padding=1),  # TODO 网络调整部分
+            Conv2d(32, 32, kernel_size=5, stride=1, padding=1),  # TODO 网络调整部分
 
             Conv2d(32, 64, kernel_size=5, stride=(1, 2), padding=1),
 
@@ -45,11 +45,11 @@ class SyncNet_color(nn.Module):
 
             Conv2d(512, 512, kernel_size=3, stride=2, padding=1),
 
-            Conv2d(512, 512, kernel_size=3, stride=2, padding=0),  # 网络调整部分
+            Conv2d(512, 512, kernel_size=3, stride=2, padding=0),  # TODO 网络调整部分
 
             Conv2d(512, 512, kernel_size=3, stride=1, padding=0),
 
-            Conv2d(512, 512, kernel_size=2, stride=1, padding=0),  # 网络调整部分
+            Conv2d(512, 512, kernel_size=2, stride=1, padding=0),  # TODO 网络调整部分
 
             Conv2d(512, 512, kernel_size=1, stride=1, padding=0),
         )

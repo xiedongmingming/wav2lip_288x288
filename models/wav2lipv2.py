@@ -10,7 +10,7 @@ from .conv2 import Conv2dTranspose, Conv2d, nonorm_Conv2d
 
 class Wav2Lip(nn.Module):
 
-    def __init__(self):
+    def __init__(self):  # TODO 网络调整较大
 
         super(Wav2Lip, self).__init__()
 
@@ -147,27 +147,27 @@ class Wav2Lip(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, audio_sequences, face_sequences):
+    def forward(self, audio_sequences, faces_sequences):
         #
         # audio_sequences = (B, T, 1, 80, 16)
         #
         B = audio_sequences.size(0)
 
-        input_dim_size = len(face_sequences.size())
+        input_dim_size = len(faces_sequences.size())
 
         if input_dim_size > 4:
             #
             audio_sequences = torch.cat([audio_sequences[:, i] for i in range(audio_sequences.size(1))], dim=0)
-
-            face_sequences = torch.cat([face_sequences[:, :, i] for i in range(face_sequences.size(2))], dim=0)
+            faces_sequences = torch.cat([faces_sequences[:, :, i] for i in range(faces_sequences.size(2))], dim=0)
 
         audio_embedding = self.audio_encoder(audio_sequences)  # B, 512, 1, 1
 
         feats = []
 
-        x = face_sequences
+        x = faces_sequences
 
         for f in self.face_encoder_blocks:
+            #
             x = f(x)
 
             feats.append(x)
@@ -228,20 +228,22 @@ class Wav2Lip_disc_qual(nn.Module):
                 nonorm_Conv2d(128, 128, kernel_size=5, stride=1, padding=2)
             ),
 
-            nn.Sequential(
-                nonorm_Conv2d(128, 128, kernel_size=5, stride=2, padding=2),  # 36,36
-                nonorm_Conv2d(128, 128, kernel_size=5, stride=1, padding=2)
-            ),
+            # TODO 新增网络
+            # nn.Sequential(
+            #     nonorm_Conv2d(128, 128, kernel_size=5, stride=2, padding=2),  # 36,36
+            #     nonorm_Conv2d(128, 128, kernel_size=5, stride=1, padding=2)
+            # ),
 
             nn.Sequential(
                 nonorm_Conv2d(128, 256, kernel_size=5, stride=2, padding=2),  # 18,18
                 nonorm_Conv2d(256, 256, kernel_size=5, stride=1, padding=2)
             ),
 
-            nn.Sequential(
-                nonorm_Conv2d(256, 256, kernel_size=5, stride=2, padding=2),  # 9,9
-                nonorm_Conv2d(256, 256, kernel_size=5, stride=1, padding=2)
-            ),
+            # TODO 新增网络
+            # nn.Sequential(
+            #     nonorm_Conv2d(256, 256, kernel_size=5, stride=2, padding=2),  # 9,9
+            #     nonorm_Conv2d(256, 256, kernel_size=5, stride=1, padding=2)
+            # ),
 
             nn.Sequential(
                 nonorm_Conv2d(256, 512, kernel_size=3, stride=2, padding=1),  # 5,5
@@ -278,7 +280,6 @@ class Wav2Lip_disc_qual(nn.Module):
     def perceptual_forward(self, false_face_sequences):
 
         false_face_sequences = self.to_2d(false_face_sequences)
-
         false_face_sequences = self.get_lower_half(false_face_sequences)
 
         false_feats = false_face_sequences

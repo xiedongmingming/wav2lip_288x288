@@ -67,7 +67,7 @@ parser.add_argument(
 
 args = parser.parse_args()
 
-global_step = 0
+global_steps = 0
 global_epoch = 0
 
 use_cuda = torch.cuda.is_available()
@@ -350,7 +350,7 @@ def train(
         nepochs=None
 ):
     #
-    global global_step, global_epoch
+    global global_steps, global_epoch
 
     resumed_step = global_step
 
@@ -587,7 +587,7 @@ def save_checkpoint(model, optimizer, step, checkpoint_dir, epoch, prefix=''):
     #
     checkpoint_path = join(
         checkpoint_dir,
-        "{}checkpoint_step{:09d}.pth".format(prefix, global_step)
+        "{}checkpoint_step{:09d}.pth".format(prefix, global_steps)
     )
 
     optimizer_state = optimizer.state_dict() if hparams.save_optimizer_state else None
@@ -614,7 +614,7 @@ def _load(checkpoint_path):
 
 def load_checkpoint(path, model, optimizer, reset_optimizer=False, overwrite_global_states=True):
     #
-    global global_step
+    global global_steps
     global global_epoch
 
     print("Load checkpoint from: {}".format(path))

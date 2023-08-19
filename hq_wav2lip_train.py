@@ -25,42 +25,47 @@ import os, random, cv2, argparse
 
 from hparams import hparams, get_image_list
 
-parser = argparse.ArgumentParser(description='Code to train the Wav2Lip model WITH the visual quality discriminator')
+##############################################################################
+parser = argparse.ArgumentParser(description='code to train the wav2lip model with the visual quality discriminator')
 
 parser.add_argument(
     "--data_root",
-    help="Root folder of the preprocessed LRS2 dataset",
-    required=True,
-    type=str
+    help="root folder of the preprocessed lrs2 dataset",
+    # required=True, # TODO
+    type=str,
+    default="C:\datasets\hq3_preprocessed"  # TODO
 )
 parser.add_argument(
     '--checkpoint_dir',
-    help='Save checkpoints to this directory',
-    required=True,
-    type=str
+    help='save checkpoints to this directory',
+    # required=True, # TODO
+    type=str,
+    default="./checkpoints/hq_wav2lip2/"  # TODO
 )
 parser.add_argument(
     '--syncnet_checkpoint_path',
-    help='Load the pre-trained Expert discriminator',
-    required=True,
-    type=str
+    help='load the pre-trained expert discriminator',
+    # required=True, # TODO
+    type=str,
+    default="./checkpoints/syncnet2/checkpoint_step001050000.pth"  # TODO
 )
 parser.add_argument(
     '--checkpoint_path',
-    help='Resume generator from this checkpoint',
-    default=None,
-    type=str
+    help='resume generator from this checkpoint',
+    default="./checkpoints/hq_wav2lip2/checkpoint_step000063000.pth",  # TODO
+    type=str,
 )
 parser.add_argument(  # ？？？？
     '--disc_checkpoint_path',
-    help='Resume quality disc from this checkpoint',
-    default=None,
+    help='resume quality disc from this checkpoint',
+    default="./checkpoints/hq_wav2lip2/disc_checkpoint_step000063000.pth",  # TODO
     type=str
 )
 
 args = parser.parse_args()
 
-global_step = 0
+##############################################################################
+global_steps = 0
 global_epoch = 0
 
 use_cuda = torch.cuda.is_available()
@@ -71,6 +76,7 @@ syncnet_T = 5
 syncnet_mel_step_size = 16
 
 
+##############################################################################
 class Dataset(object):
 
     def __init__(self, split):
@@ -103,7 +109,9 @@ class Dataset(object):
 
     def read_window(self, window_fnames):
 
-        if window_fnames is None: return None
+        if window_fnames is None:
+            #
+            return None
 
         window = []
 
@@ -148,7 +156,9 @@ class Dataset(object):
 
         start_frame_num = self.get_frame_id(start_frame) + 1  # 0-indexing ---> 1-indexing
 
-        if start_frame_num - 2 < 0: return None
+        if start_frame_num - 2 < 0:
+            #
+            return None
 
         for i in range(start_frame_num, start_frame_num + syncnet_T):
 
@@ -169,6 +179,7 @@ class Dataset(object):
         # 3 x T x H x W
         #
         x = np.asarray(window) / 255.
+
         x = np.transpose(x, (3, 0, 1, 2))
 
         return x
@@ -191,25 +202,23 @@ class Dataset(object):
                 #
                 continue
 
-            img_name = random.choice(img_names)
-
+            right_img_name = random.choice(img_names)
             wrong_img_name = random.choice(img_names)
 
-            while wrong_img_name == img_name:
+            while wrong_img_name == right_img_name:
                 #
                 wrong_img_name = random.choice(img_names)
 
-            window_fnames = self.get_window(img_name)
-
+            right_window_fnames = self.get_window(right_img_name)
             wrong_window_fnames = self.get_window(wrong_img_name)
 
-            if window_fnames is None or wrong_window_fnames is None:
+            if right_window_fnames is None or wrong_window_fnames is None:
                 #
                 continue
 
-            window = self.read_window(window_fnames)
+            right_window = self.read_window(right_window_fnames)
 
-            if window is None:
+            if right_window is None:
                 #
                 continue
 
@@ -231,27 +240,27 @@ class Dataset(object):
 
                 continue
 
-            mel = self.crop_audio_window(orig_mel.copy(), img_name)
+            mel = self.crop_audio_window(orig_mel.copy(), right_img_name)
 
-            if (mel.shape[0] != syncnet_mel_step_size):
+            if mel.shape[0] != syncnet_mel_step_size:
                 #
                 continue
 
-            indiv_mels = self.get_segmented_mels(orig_mel.copy(), img_name)
+            indiv_mels = self.get_segmented_mels(orig_mel.copy(), right_img_name)
 
             if indiv_mels is None:
                 #
                 continue
 
-            window = self.prepare_window(window)
+            right_window = self.prepare_window(right_window)
 
-            y = window.copy()
+            y = right_window.copy()
 
-            window[:, :, window.shape[2] // 2:] = 0.
+            right_window[:, :, right_window.shape[2] // 2:] = 0.
 
             wrong_window = self.prepare_window(wrong_window)
 
-            x = np.concatenate([window, wrong_window], axis=0)
+            x = np.concatenate([right_window, wrong_window], axis=0)
 
             x = torch.FloatTensor(x)
 
@@ -260,10 +269,18 @@ class Dataset(object):
             indiv_mels = torch.FloatTensor(indiv_mels).unsqueeze(1)
 
             y = torch.FloatTensor(y)
-
+            #
+            # x: {Tensor: (6, 5, 96, 96)} -- 正样本[下半部分空]+负样本
+            # y: {Tensor: (3, 5, 96, 96)} -- 正样本
+            #
+            # mel: {Tensor: (1, 80, 16)} -- 正样本音频
+            #
+            # indiv_mels: {Tensor: (5, 1, 80, 16)} -- 正样本[-1:4]音频(共5个)
+            #
             return x, indiv_mels, mel, y
 
 
+##############################################################################
 def save_sample_images(x, g, gt, global_step, checkpoint_dir):
     #
     x = (x.detach().cpu().numpy().transpose(0, 2, 3, 4, 1) * 255.).astype(np.uint8)
@@ -288,6 +305,7 @@ def save_sample_images(x, g, gt, global_step, checkpoint_dir):
             cv2.imwrite('{}/{}_{}.jpg'.format(folder, batch_idx, t), c[t])
 
 
+##############################################################################
 logloss = nn.BCELoss()
 
 
@@ -300,11 +318,12 @@ def cosine_loss(a, v, y):
     return loss
 
 
+##############################################################################
 device = torch.device("cuda" if use_cuda else "cpu")
 
-syncnet_model = SyncNet().to(device)
+sync_model = SyncNet().to(device)
 
-for p in syncnet_model.parameters():
+for p in sync_model.parameters():
     #
     p.requires_grad = False
 
@@ -319,7 +338,7 @@ def get_sync_loss(mel, g):
     #
     # B, 3 * T, H//2, W
     #
-    a, v = syncnet_model(mel, g)
+    a, v = sync_model(mel, g)
 
     y = torch.ones(g.size(0), 1).float().to(device)
 
@@ -328,20 +347,20 @@ def get_sync_loss(mel, g):
 
 def train(
         device,
-        wav2lip_model,
-        wavdisc_model,
+        wav2_model,
+        disc_model,
         train_data_loader,
         tests_data_loader,
-        wav2lip_optimizer,
-        wavdisc_optimizer,  # ？？？
+        wav2_optimizer,
+        disc_optimizer,  # ？？？
         checkpoint_dir=None,
         checkpoint_interval=None,
         nepochs=None
 ):
     #
-    global global_step, global_epoch
+    global global_steps, global_epoch
 
-    resumed_step = global_step
+    resumed_step = global_steps
 
     while global_epoch < nepochs:
 
@@ -354,15 +373,15 @@ def train(
 
         for step, (x, indiv_mels, mel, gt) in prog_bar:
             #
-            # x: {Tensor: (6, 5, 96, 96)} -- 正样本[下半部分空]+负样本
-            # y: {Tensor: (3, 5, 96, 96)} -- 正样本
+            # x: {Tensor: (N, 6, 5, 96, 96)} -- 正样本[下半部分空]+负样本
+            # y: {Tensor: (N, 3, 5, 96, 96)} -- 正样本
             #
-            # mel: {Tensor: (1, 80, 16)} -- 正样本音频
+            # mel: {Tensor: (N, 1, 80, 16)} -- 正样本音频
             #
-            # indiv_mels: {Tensor: (5, 1, 80, 16)} -- 正样本[-1:4]音频(共5个)
+            # indiv_mels: {Tensor: (N, 5, 1, 80, 16)} -- 正样本[-1:4]音频(共5个)
             #
-            wavdisc_model.train()  # ？
-            wav2lip_model.train()
+            disc_model.train()  # ？
+            wav2_model.train()
 
             x = x.to(device)
 
@@ -373,10 +392,10 @@ def train(
             gt = gt.to(device)
 
             # train generator now. remove all grads.
-            wav2lip_optimizer.zero_grad()
-            wavdisc_optimizer.zero_grad()
+            wav2_optimizer.zero_grad()
+            disc_optimizer.zero_grad()
 
-            g = wav2lip_model(indiv_mels, x)  # 根据音频和参考生成
+            g = wav2_model(indiv_mels, x)  # 根据音频和参考生成
 
             if hparams.syncnet_wt > 0.:
                 sync_loss = get_sync_loss(mel, g)
@@ -384,7 +403,7 @@ def train(
                 sync_loss = 0.
 
             if hparams.disc_wt > 0.:
-                perceptual_loss = wavdisc_model.perceptual_forward(g)
+                perceptual_loss = disc_model.perceptual_forward(g)
             else:
                 perceptual_loss = 0.
 
@@ -396,34 +415,34 @@ def train(
 
             loss.backward()
 
-            wav2lip_optimizer.step()
+            wav2_optimizer.step()
 
             # remove all gradients before training disc
-            wavdisc_optimizer.zero_grad()
+            disc_optimizer.zero_grad()
 
-            pred = wavdisc_model(gt)
+            pred = disc_model(gt)  # 真实值
 
             disc_real_loss = F.binary_cross_entropy(pred, torch.ones((len(pred), 1)).to(device))
             disc_real_loss.backward()
 
-            pred = wavdisc_model(g.detach())
+            pred = disc_model(g.detach())  # 预测值
 
             disc_fake_loss = F.binary_cross_entropy(pred, torch.zeros((len(pred), 1)).to(device))
             disc_fake_loss.backward()
 
-            wavdisc_optimizer.step()
+            disc_optimizer.step()
 
             running_disc_real_loss += disc_real_loss.item()
             running_disc_fake_loss += disc_fake_loss.item()
 
-            if global_step % checkpoint_interval == 0:
+            if global_steps % checkpoint_interval == 0:
                 #
-                save_sample_images(x, g, gt, global_step, checkpoint_dir)
+                save_sample_images(x, g, gt, global_steps, checkpoint_dir)
 
             # Logs
-            global_step += 1
+            global_steps += 1
 
-            cur_session_steps = global_step - resumed_step
+            cur_session_steps = global_steps - resumed_step
 
             running_l1_loss += l1loss.item()
 
@@ -437,30 +456,36 @@ def train(
             else:
                 running_perceptual_loss += 0.
 
-            if global_step == 1 or global_step % checkpoint_interval == 0:
+            if global_steps == 1 or global_steps % checkpoint_interval == 0:
                 #
                 save_checkpoint(
-                    wav2lip_model,
-                    wav2lip_optimizer,
-                    global_step,
+                    wav2_model,
+                    wav2_optimizer,
+                    global_steps,
                     checkpoint_dir,
                     global_epoch
                 )
 
                 save_checkpoint(
-                    wavdisc_model,
-                    wavdisc_optimizer,
-                    global_step,
+                    disc_model,
+                    disc_optimizer,
+                    global_steps,
                     checkpoint_dir,
                     global_epoch,
                     prefix='disc_'
                 )
 
-            if global_step % hparams.eval_interval == 0:
+            if global_steps % hparams.eval_interval == 0:
                 #
                 with torch.no_grad():
 
-                    average_sync_loss = eval_model(tests_data_loader, global_step, device, wav2lip_model, wavdisc_model)
+                    average_sync_loss = eval_model(
+                        tests_data_loader,
+                        global_steps,
+                        device,
+                        wav2_model,
+                        disc_model
+                    )
 
                     if average_sync_loss < .75:
                         #
@@ -534,7 +559,9 @@ def eval_model(test_data_loader, global_step, device, model, disc):
             else:
                 running_perceptual_loss.append(0.)
 
-            if step > eval_steps: break
+            if step > eval_steps:
+                #
+                break
 
         print('L1: {}, Sync: {}, Percep: {} | Fake: {}, Real: {}'.format(
             sum(running_l1_loss) / len(running_l1_loss),
@@ -547,10 +574,10 @@ def eval_model(test_data_loader, global_step, device, model, disc):
         return sum(running_sync_loss) / len(running_sync_loss)
 
 
-def save_checkpoint(model, optimizer, step, checkpoint_dir, epoch, prefix=''):
+def save_checkpoint(model, optimizer, steps, checkpoint_dir, epoch, prefix=''):
     #
     checkpoint_path = join(
-        checkpoint_dir, "{}checkpoint_step{:09d}.pth".format(prefix, global_step)
+        checkpoint_dir, "{}checkpoint_step{:09d}.pth".format(prefix, global_steps)
     )
 
     optimizer_state = optimizer.state_dict() if hparams.save_optimizer_state else None
@@ -558,7 +585,7 @@ def save_checkpoint(model, optimizer, step, checkpoint_dir, epoch, prefix=''):
     torch.save({
         "state_dict": model.state_dict(),
         "optimizer": optimizer_state,
-        "global_step": step,
+        "global_steps": steps,
         "global_epoch": epoch,
     }, checkpoint_path)
 
@@ -577,7 +604,7 @@ def _load(checkpoint_path):
 
 def load_checkpoint(path, model, optimizer, reset_optimizer=False, overwrite_global_states=True):
     #
-    global global_step
+    global global_steps
     global global_epoch
 
     print("Load checkpoint from: {}".format(path))
@@ -606,8 +633,7 @@ def load_checkpoint(path, model, optimizer, reset_optimizer=False, overwrite_glo
 
     if overwrite_global_states:
         #
-        global_step = checkpoint["global_step"]
-
+        global_steps = checkpoint["global_steps"]
         global_epoch = checkpoint["global_epoch"]
 
     return model
@@ -617,7 +643,9 @@ if __name__ == "__main__":
     #
     checkpoint_dir = args.checkpoint_dir
 
+    #
     # dataset and dataloader setup
+    #
     train_dataset = Dataset('train')
     tests_dataset = Dataset('val')
 
@@ -625,45 +653,46 @@ if __name__ == "__main__":
         train_dataset,
         batch_size=hparams.batch_size,
         shuffle=True,
-        num_workers=hparams.num_workers
+        num_workers=1,  # hparams.num_workers
     )
 
     tests_data_loader = data_utils.DataLoader(
         tests_dataset,
         batch_size=hparams.batch_size,
-        num_workers=4
+        # shuffle=True,
+        num_workers=1,  # 4
     )
 
     device = torch.device("cuda" if use_cuda else "cpu")
 
     # model
-    wav2lip_model = Wav2Lip().to(device)
-    wavdisc_model = Wav2Lip_disc_qual().to(device)
+    wav2_model = Wav2Lip().to(device)
+    disc_model = Wav2Lip_disc_qual().to(device)
 
     print('total trainable params: wav2lip_model {}'.format(
-        sum(p.numel() for p in wav2lip_model.parameters() if p.requires_grad)))
+        sum(p.numel() for p in wav2_model.parameters() if p.requires_grad)
+    ))
     print('total trainable params: wavdisc_model {}'.format(
-        sum(p.numel() for p in wavdisc_model.parameters() if p.requires_grad)))
+        sum(p.numel() for p in disc_model.parameters() if p.requires_grad)
+    ))
 
-    wav2lip_optimizer = optim.Adam(
-        [p for p in wav2lip_model.parameters() if p.requires_grad],
+    wav2_optimizer = optim.Adam(
+        [p for p in wav2_model.parameters() if p.requires_grad],
         lr=hparams.initial_learning_rate,
         betas=(0.5, 0.999)
     )
-
-    wavdisc_optimizer = optim.Adam(
-        [p for p in wavdisc_model.parameters() if p.requires_grad],
+    disc_optimizer = optim.Adam(
+        [p for p in disc_model.parameters() if p.requires_grad],
         lr=hparams.disc_initial_learning_rate,
         betas=(0.5, 0.999)
-
     )
 
     if args.checkpoint_path is not None:
         #
         load_checkpoint(
             args.checkpoint_path,
-            wav2lip_model,
-            wav2lip_optimizer,
+            wav2_model,
+            wav2_optimizer,
             reset_optimizer=False
         )
 
@@ -671,15 +700,15 @@ if __name__ == "__main__":
         #
         load_checkpoint(
             args.disc_checkpoint_path,
-            wavdisc_model,
-            wavdisc_optimizer,
+            disc_model,
+            disc_optimizer,
             reset_optimizer=False,
             overwrite_global_states=False
         )
 
     load_checkpoint(
         args.syncnet_checkpoint_path,
-        syncnet_model,
+        sync_model,
         None,
         reset_optimizer=True,
         overwrite_global_states=False
@@ -692,12 +721,12 @@ if __name__ == "__main__":
     # Train!
     train(
         device,
-        wav2lip_model,
-        wavdisc_model,
+        wav2_model,
+        disc_model,
         train_data_loader,
         tests_data_loader,
-        wav2lip_optimizer,
-        wavdisc_optimizer,
+        wav2_optimizer,
+        disc_optimizer,
         checkpoint_dir=checkpoint_dir,
         checkpoint_interval=hparams.checkpoint_interval,
         nepochs=hparams.nepochs
